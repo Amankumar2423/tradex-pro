@@ -321,29 +321,127 @@ function AdvancedChart({symbol, data, indicator, T}) {
   );
 }
 
-function LoginScreen({onLogin, T}) {
+ function LoginScreen({onLogin, T}) {
+  const [mode, setMode] = useState("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("demo@tradex.pro");
   const [pass, setPass] = useState("demo123");
+  const [confirm, setConfirm] = useState("");
   const [err, setErr] = useState("");
-  const inp = {background:T.surface,border:`1px solid ${T.border}`,borderRadius:10,padding:"12px 16px",color:T.text,fontSize:14,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box",marginBottom:12};
+  const [loading, setLoading] = useState(false);
+
+  const inp = {
+    background:T.surface, border:`1px solid ${T.border}`, borderRadius:10,
+    padding:"12px 16px", color:T.text, fontSize:14, fontFamily:"inherit",
+    outline:"none", width:"100%", boxSizing:"border-box", marginBottom:12
+  };
+
+  const handleLogin = async () => {
+    if(!email||!pass){setErr("Fill all fields");return;}
+    setLoading(true); setErr("");
+    try {
+      const res = await fetch("https://tradex-pro.onrender.com/api/auth/login",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email,password:pass})
+      });
+      const data = await res.json();
+      if(data.token){
+        localStorage.setItem("tradex_token", data.token);
+        localStorage.setItem("tradex_user", JSON.stringify(data.user));
+        onLogin(data.user);
+      } else {
+        setErr(data.error||"Login failed");
+      }
+    } catch {
+      // fallback to demo login if backend is sleeping
+      if(email==="demo@tradex.pro"&&pass==="demo123"){
+        onLogin({name:"Alex Morgan",email:"demo@tradex.pro",cash:10000});
+      } else {
+        setErr("Server is starting up, try again in 30 seconds!");
+      }
+    }
+    setLoading(false);
+  };
+
+  const handleRegister = async () => {
+    if(!name||!email||!pass||!confirm){setErr("Fill all fields");return;}
+    if(pass!==confirm){setErr("Passwords do not match");return;}
+    if(pass.length<6){setErr("Password must be at least 6 characters");return;}
+    setLoading(true); setErr("");
+    try {
+      const res = await fetch("https://tradex-pro.onrender.com/api/auth/register",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({name,email,password:pass})
+      });
+      const data = await res.json();
+      if(data.token){
+        localStorage.setItem("tradex_token", data.token);
+        localStorage.setItem("tradex_user", JSON.stringify(data.user));
+        onLogin(data.user);
+      } else {
+        setErr(data.error||"Registration failed");
+      }
+    } catch {
+      setErr("Server is starting up, please try again in 30 seconds!");
+    }
+    setLoading(false);
+  };
+
   return (
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'IBM Plex Mono',monospace"}}>
-      <div style={{width:"100%",maxWidth:400,padding:16}}>
+      <div style={{width:"100%",maxWidth:420,padding:16}}>
         <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{width:60,height:60,background:"linear-gradient(135deg,#58a6ff,#bc8cff)",borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,margin:"0 auto 16px"}}>📈</div>
+          <div style={{width:64,height:64,background:"linear-gradient(135deg,#58a6ff,#bc8cff)",borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,margin:"0 auto 16px"}}>📈</div>
           <div style={{fontSize:28,fontWeight:800,color:T.text,letterSpacing:0.5}}>TradeX Pro</div>
-          <div style={{fontSize:13,color:T.muted,marginTop:6}}>Professional Trading Dashboard</div>
+          <div style={{fontSize:13,color:T.muted,marginTop:6}}>Professional Stock Trading Platform</div>
         </div>
+
         <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:18,padding:28}}>
-          <div style={{fontSize:13,color:T.muted,marginBottom:18}}>Sign in to your account</div>
-          <input style={inp} value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email"/>
-          <input style={inp} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password"/>
-          {err&&<div style={{color:T.red,fontSize:12,marginBottom:10}}>{err}</div>}
-          <button onClick={()=>{ if(email===DEMO_USER.email&&pass===DEMO_USER.password)onLogin(); else setErr("Invalid credentials. Try demo@tradex.pro / demo123"); }}
-            style={{width:"100%",background:"linear-gradient(135deg,#58a6ff,#bc8cff)",color:"#000",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>
-            SIGN IN →
-          </button>
-          <div style={{textAlign:"center",marginTop:14,fontSize:11,color:T.muted}}>Demo: demo@tradex.pro / demo123</div>
+
+          {/* Tab switcher */}
+          <div style={{display:"flex",background:T.bg,borderRadius:10,padding:4,marginBottom:24}}>
+            <button onClick={()=>{setMode("login");setErr("");setEmail("demo@tradex.pro");setPass("demo123");}}
+              style={{flex:1,background:mode==="login"?T.card:"transparent",color:mode==="login"?T.accent:T.muted,border:"none",borderRadius:8,padding:"8px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:mode==="login"?800:400,transition:"all 0.2s"}}>
+              Sign In
+            </button>
+            <button onClick={()=>{setMode("register");setErr("");setEmail("");setPass("");}}
+              style={{flex:1,background:mode==="register"?T.card:"transparent",color:mode==="register"?T.accent:T.muted,border:"none",borderRadius:8,padding:"8px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:mode==="register"?800:400,transition:"all 0.2s"}}>
+              Register
+            </button>
+          </div>
+
+          {mode==="login" ? (
+            <div>
+              <div style={{fontSize:13,color:T.muted,marginBottom:16}}>Welcome back! Sign in to trade.</div>
+              <input style={inp} value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address"/>
+              <input style={inp} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password"/>
+              {err&&<div style={{color:T.red,fontSize:12,marginBottom:10}}>{err}</div>}
+              <button onClick={handleLogin} disabled={loading}
+                style={{width:"100%",background:"linear-gradient(135deg,#58a6ff,#bc8cff)",color:"#000",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit",opacity:loading?0.7:1}}>
+                {loading?"Signing in...":"SIGN IN →"}
+              </button>
+              <div style={{textAlign:"center",marginTop:16,padding:"10px",background:T.bg,borderRadius:8}}>
+                <div style={{fontSize:11,color:T.muted,marginBottom:4}}>Demo Account</div>
+                <div style={{fontSize:11,color:T.accent}}>demo@tradex.pro / demo123</div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{fontSize:13,color:T.muted,marginBottom:16}}>Create your account and get $10,000 to trade!</div>
+              <input style={inp} value={name} onChange={e=>setName(e.target.value)} placeholder="Full Name"/>
+              <input style={inp} value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address"/>
+              <input style={inp} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password (min 6 characters)"/>
+              <input style={inp} type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="Confirm Password"/>
+              {err&&<div style={{color:T.red,fontSize:12,marginBottom:10}}>{err}</div>}
+              <button onClick={handleRegister} disabled={loading}
+                style={{width:"100%",background:"linear-gradient(135deg,#3fb950,#58a6ff)",color:"#000",border:"none",borderRadius:10,padding:"13px",fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"inherit",opacity:loading?0.7:1}}>
+                {loading?"Creating Account...":"CREATE ACCOUNT →"}
+              </button>
+              <div style={{textAlign:"center",marginTop:12,fontSize:11,color:T.muted}}>
+                🎁 Start with $10,000 virtual cash!
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
