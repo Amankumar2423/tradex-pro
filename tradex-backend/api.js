@@ -2,7 +2,7 @@
 // Place this file in: tradex-pro/src/api.js
 // This connects your React frontend to the Node.js backend
 
-const BASE_URL = "http://localhost:5000/api";
+const BASE_URL = "https://tradex-pro.onrender.com/api";
 
 // Get token from localStorage
 const getToken = () => localStorage.getItem("tradex_token");
