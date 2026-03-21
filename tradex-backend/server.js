@@ -4,8 +4,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const http = require("http");
 const { Server } = require("socket.io");
-const path = require("path");
-const fs = require("fs");
+const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
 const server = http.createServer(app);
@@ -17,32 +16,19 @@ app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const JWT_SECRET = "tradex_pro_secret_2024";
+const MONGO_URI = "mongodb+srv://tradexadmin:tradex2024@cluster0.2ft74l3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const DB_NAME = "tradexdb";
 
-// ─── SIMPLE JSON DATABASE (works everywhere, no native modules) ───────────────
-const DB_FILE = path.join(__dirname, "tradex-data.json");
+let db;
 
-function loadDB() {
-  if (!fs.existsSync(DB_FILE)) {
-    const initial = { users: [], transactions: [], watchlist: [], orders: [], nextId: 1 };
-    fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2));
-    return initial;
-  }
-  return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-}
-
-function saveDB(data) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-}
-
-function getNextId() {
-  const db = loadDB();
-  const id = db.nextId;
-  db.nextId += 1;
-  saveDB(db);
-  return id;
-}
-
-console.log("✅ JSON Database ready: tradex-data.json");
+// ─── CONNECT TO MONGODB ───────────────────────────────────────────────────────
+MongoClient.connect(MONGO_URI).then(client => {
+  db = client.db(DB_NAME);
+  console.log("✅ Connected to MongoDB Atlas!");
+  console.log("✅ Database: tradexdb");
+}).catch(err => {
+  console.error("❌ MongoDB connection error:", err);
+});
 
 // ─── LIVE STOCK PRICES ────────────────────────────────────────────────────────
 const STOCK_PRICES = {
@@ -89,36 +75,45 @@ function authMiddleware(req, res, next) {
 }
 
 // ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password)
     return res.status(400).json({ error: "All fields required" });
-  const db = loadDB();
-  if (db.users.find(u => u.email === email))
-    return res.status(400).json({ error: "Email already registered" });
-  const hashed = bcrypt.hashSync(password, 10);
-  const user = { id: getNextId(), name, email, password: hashed, cash: 10000, createdAt: new Date().toISOString() };
-  db.users.push(user);
-  saveDB(db);
-  const token = jwt.sign({ id: user.id, email, name }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, user: { id: user.id, name, email, cash: 10000 } });
+  try {
+    const existing = await db.collection("users").findOne({ email });
+    if (existing) return res.status(400).json({ error: "Email already registered" });
+    const hashed = bcrypt.hashSync(password, 10);
+    const result = await db.collection("users").insertOne({
+      name, email, password: hashed, cash: 10000, createdAt: new Date()
+    });
+    const token = jwt.sign({ id: result.insertedId, email, name }, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user: { id: result.insertedId, name, email, cash: 10000 } });
+  } catch(e) {
+    res.status(500).json({ error: "Server error: " + e.message });
+  }
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
-  const db = loadDB();
-  const user = db.users.find(u => u.email === email);
-  if (!user || !bcrypt.compareSync(password, user.password))
-    return res.status(401).json({ error: "Invalid email or password" });
-  const token = jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, cash: user.cash } });
+  try {
+    const user = await db.collection("users").findOne({ email });
+    if (!user || !bcrypt.compareSync(password, user.password))
+      return res.status(401).json({ error: "Invalid email or password" });
+    const token = jwt.sign({ id: user._id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email, cash: user.cash } });
+  } catch(e) {
+    res.status(500).json({ error: "Server error: " + e.message });
+  }
 });
 
-app.get("/api/auth/me", authMiddleware, (req, res) => {
-  const db = loadDB();
-  const user = db.users.find(u => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({ id: user.id, name: user.name, email: user.email, cash: user.cash });
+app.get("/api/auth/me", authMiddleware, async (req, res) => {
+  try {
+    const user = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ id: user._id, name: user.name, email: user.email, cash: user.cash });
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ─── STOCK ROUTES ─────────────────────────────────────────────────────────────
@@ -131,144 +126,166 @@ app.get("/api/stocks/:symbol", (req, res) => {
 });
 
 // ─── PORTFOLIO ────────────────────────────────────────────────────────────────
-app.get("/api/portfolio", authMiddleware, (req, res) => {
-  const db = loadDB();
-  const user = db.users.find(u => u.id === req.user.id);
-  const userTx = db.transactions.filter(t => t.userId === req.user.id);
-  const holdings = {};
-  userTx.forEach(t => {
-    if (!holdings[t.symbol]) holdings[t.symbol] = { symbol: t.symbol, quantity: 0, avgBuyPrice: 0, totalCost: 0 };
-    if (t.type === "BUY") {
-      holdings[t.symbol].totalCost += t.total;
-      holdings[t.symbol].quantity += t.quantity;
-      holdings[t.symbol].avgBuyPrice = holdings[t.symbol].totalCost / holdings[t.symbol].quantity;
-    } else {
-      holdings[t.symbol].quantity -= t.quantity;
-    }
-  });
-  const activeHoldings = Object.values(holdings)
-    .filter(h => h.quantity > 0)
-    .map(h => ({
-      ...h,
-      currentPrice: STOCK_PRICES[h.symbol]?.price || 0,
-      currentValue: (STOCK_PRICES[h.symbol]?.price || 0) * h.quantity,
-      pnl: ((STOCK_PRICES[h.symbol]?.price || 0) - h.avgBuyPrice) * h.quantity,
-    }));
-  res.json({ cash: user.cash, holdings: activeHoldings });
+app.get("/api/portfolio", authMiddleware, async (req, res) => {
+  try {
+    const user = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
+    const txs = await db.collection("transactions").find({ userId: req.user.id.toString() }).toArray();
+    const holdings = {};
+    txs.forEach(t => {
+      if (!holdings[t.symbol]) holdings[t.symbol] = { symbol: t.symbol, quantity: 0, avgBuyPrice: 0, totalCost: 0 };
+      if (t.type === "BUY") {
+        holdings[t.symbol].totalCost += t.total;
+        holdings[t.symbol].quantity += t.quantity;
+        holdings[t.symbol].avgBuyPrice = holdings[t.symbol].totalCost / holdings[t.symbol].quantity;
+      } else {
+        holdings[t.symbol].quantity -= t.quantity;
+      }
+    });
+    const activeHoldings = Object.values(holdings)
+      .filter(h => h.quantity > 0)
+      .map(h => ({
+        ...h,
+        currentPrice: STOCK_PRICES[h.symbol]?.price || 0,
+        currentValue: (STOCK_PRICES[h.symbol]?.price || 0) * h.quantity,
+        pnl: ((STOCK_PRICES[h.symbol]?.price || 0) - h.avgBuyPrice) * h.quantity,
+      }));
+    res.json({ cash: user.cash, holdings: activeHoldings });
+  } catch(e) {
+    res.status(500).json({ error: "Server error: " + e.message });
+  }
 });
 
 // ─── TRADE ────────────────────────────────────────────────────────────────────
-app.post("/api/trade", authMiddleware, (req, res) => {
+app.post("/api/trade", authMiddleware, async (req, res) => {
   const { symbol, type, quantity, orderType = "market" } = req.body;
   const sym = symbol?.toUpperCase();
   if (!sym || !type || !quantity)
-    return res.status(400).json({ error: "symbol, type and quantity are required" });
+    return res.status(400).json({ error: "symbol, type and quantity required" });
   if (!STOCK_PRICES[sym])
     return res.status(404).json({ error: "Stock not found" });
-
-  const db = loadDB();
-  const userIdx = db.users.findIndex(u => u.id === req.user.id);
-  const user = db.users[userIdx];
-  const price = STOCK_PRICES[sym].price;
-  const total = parseFloat((price * quantity).toFixed(2));
-
-  if (type === "BUY") {
-    if (user.cash < total)
-      return res.status(400).json({ error: "Insufficient balance" });
-    db.users[userIdx].cash = parseFloat((user.cash - total).toFixed(2));
-  } else {
-    const userTx = db.transactions.filter(t => t.userId === req.user.id && t.symbol === sym);
-    let held = 0;
-    userTx.forEach(t => { held += t.type === "BUY" ? t.quantity : -t.quantity; });
-    if (held < quantity)
-      return res.status(400).json({ error: "Not enough shares" });
-    db.users[userIdx].cash = parseFloat((user.cash + total).toFixed(2));
+  try {
+    const user = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
+    const price = STOCK_PRICES[sym].price;
+    const total = parseFloat((price * quantity).toFixed(2));
+    if (type === "BUY") {
+      if (user.cash < total) return res.status(400).json({ error: "Insufficient balance" });
+      await db.collection("users").updateOne({ _id: new ObjectId(req.user.id) }, { $inc: { cash: -total } });
+    } else {
+      const txs = await db.collection("transactions").find({ userId: req.user.id.toString(), symbol: sym }).toArray();
+      let held = 0;
+      txs.forEach(t => { held += t.type === "BUY" ? t.quantity : -t.quantity; });
+      if (held < quantity) return res.status(400).json({ error: "Not enough shares" });
+      await db.collection("users").updateOne({ _id: new ObjectId(req.user.id) }, { $inc: { cash: total } });
+    }
+    const tx = { userId: req.user.id.toString(), symbol: sym, type, quantity, price, total, orderType, createdAt: new Date() };
+    const result = await db.collection("transactions").insertOne(tx);
+    const updatedUser = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
+    res.json({ success: true, transaction: { ...tx, id: result.insertedId }, newCash: updatedUser.cash });
+  } catch(e) {
+    res.status(500).json({ error: "Trade failed: " + e.message });
   }
-
-  const tx = {
-    id: getNextId(), userId: req.user.id, symbol: sym, type,
-    quantity, price, total, orderType, createdAt: new Date().toISOString()
-  };
-  db.transactions.push(tx);
-  saveDB(db);
-  res.json({ success: true, transaction: tx, newCash: db.users[userIdx].cash });
 });
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
-app.get("/api/transactions", authMiddleware, (req, res) => {
-  const db = loadDB();
-  const txs = db.transactions.filter(t => t.userId === req.user.id).reverse();
-  res.json(txs);
+app.get("/api/transactions", authMiddleware, async (req, res) => {
+  try {
+    const txs = await db.collection("transactions").find({ userId: req.user.id.toString() }).sort({ createdAt: -1 }).toArray();
+    res.json(txs);
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ─── WATCHLIST ────────────────────────────────────────────────────────────────
-app.get("/api/watchlist", authMiddleware, (req, res) => {
-  const db = loadDB();
-  const items = db.watchlist.filter(w => w.userId === req.user.id);
-  res.json(items);
+app.get("/api/watchlist", authMiddleware, async (req, res) => {
+  try {
+    const items = await db.collection("watchlist").find({ userId: req.user.id.toString() }).toArray();
+    res.json(items);
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-app.post("/api/watchlist/:symbol", authMiddleware, (req, res) => {
+app.post("/api/watchlist/:symbol", authMiddleware, async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
-  const db = loadDB();
-  if (db.watchlist.find(w => w.userId === req.user.id && w.symbol === sym))
-    return res.status(400).json({ error: "Already in watchlist" });
-  db.watchlist.push({ id: getNextId(), userId: req.user.id, symbol: sym, addedAt: new Date().toISOString() });
-  saveDB(db);
-  res.json({ success: true });
+  try {
+    const existing = await db.collection("watchlist").findOne({ userId: req.user.id.toString(), symbol: sym });
+    if (existing) return res.status(400).json({ error: "Already in watchlist" });
+    await db.collection("watchlist").insertOne({ userId: req.user.id.toString(), symbol: sym, addedAt: new Date() });
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-app.delete("/api/watchlist/:symbol", authMiddleware, (req, res) => {
+app.delete("/api/watchlist/:symbol", authMiddleware, async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
-  const db = loadDB();
-  db.watchlist = db.watchlist.filter(w => !(w.userId === req.user.id && w.symbol === sym));
-  saveDB(db);
-  res.json({ success: true });
+  try {
+    await db.collection("watchlist").deleteOne({ userId: req.user.id.toString(), symbol: sym });
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ─── ORDERS ───────────────────────────────────────────────────────────────────
-app.get("/api/orders", authMiddleware, (req, res) => {
-  const db = loadDB();
-  res.json(db.orders.filter(o => o.userId === req.user.id && o.status === "pending"));
+app.get("/api/orders", authMiddleware, async (req, res) => {
+  try {
+    const orders = await db.collection("orders").find({ userId: req.user.id.toString(), status: "pending" }).toArray();
+    res.json(orders);
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-app.post("/api/orders", authMiddleware, (req, res) => {
+app.post("/api/orders", authMiddleware, async (req, res) => {
   const { symbol, tradeType, orderType, quantity, triggerPrice } = req.body;
   if (!symbol || !tradeType || !orderType || !quantity || !triggerPrice)
     return res.status(400).json({ error: "All fields required" });
-  const db = loadDB();
-  const order = { id: getNextId(), userId: req.user.id, symbol: symbol.toUpperCase(), tradeType, orderType, quantity, triggerPrice, status: "pending", createdAt: new Date().toISOString() };
-  db.orders.push(order);
-  saveDB(db);
-  res.json({ success: true, orderId: order.id });
+  try {
+    const result = await db.collection("orders").insertOne({
+      userId: req.user.id.toString(), symbol: symbol.toUpperCase(),
+      tradeType, orderType, quantity, triggerPrice, status: "pending", createdAt: new Date()
+    });
+    res.json({ success: true, orderId: result.insertedId });
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-app.delete("/api/orders/:id", authMiddleware, (req, res) => {
-  const db = loadDB();
-  db.orders = db.orders.filter(o => !(o.id === parseInt(req.params.id) && o.userId === req.user.id));
-  saveDB(db);
-  res.json({ success: true });
+app.delete("/api/orders/:id", authMiddleware, async (req, res) => {
+  try {
+    await db.collection("orders").deleteOne({ _id: new ObjectId(req.params.id), userId: req.user.id.toString() });
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ─── LEADERBOARD ──────────────────────────────────────────────────────────────
-app.get("/api/leaderboard", (req, res) => {
-  const db = loadDB();
-  const leaders = db.users.map(u => {
-    const txs = db.transactions.filter(t => t.userId === u.id);
-    const pnl = txs.reduce((s, t) => s + (t.type === "SELL" ? t.total : -t.total), 0);
-    return { id: u.id, name: u.name, trades: txs.length, pnl: parseFloat(pnl.toFixed(2)) };
-  }).sort((a, b) => b.pnl - a.pnl).slice(0, 10);
-  res.json(leaders);
+app.get("/api/leaderboard", async (req, res) => {
+  try {
+    const users = await db.collection("users").find({}).toArray();
+    const leaders = await Promise.all(users.map(async u => {
+      const txs = await db.collection("transactions").find({ userId: u._id.toString() }).toArray();
+      const pnl = txs.reduce((s, t) => s + (t.type === "SELL" ? t.total : -t.total), 0);
+      return { id: u._id, name: u.name, email: u.email, trades: txs.length, pnl: parseFloat(pnl.toFixed(2)), cash: u.cash };
+    }));
+    leaders.sort((a, b) => b.pnl - a.pnl);
+    res.json(leaders);
+  } catch(e) {
+    res.status(500).json({ error: "Server error: " + e.message });
+  }
 });
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.json({ status: "TradeX Pro Backend Running ✅", time: new Date() }));
+app.get("/", (req, res) => res.json({ status: "TradeX Pro Backend Running ✅", database: "MongoDB Atlas ✅", time: new Date() }));
 
 // ─── WEBSOCKET ────────────────────────────────────────────────────────────────
 io.on("connection", socket => {
   console.log("📡 Client connected:", socket.id);
   socket.emit("price_update", getPrices());
-  socket.on("disconnect", () => console.log("📡 Client disconnected:", socket.id));
+  socket.on("disconnect", () => console.log("📡 Disconnected:", socket.id));
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
@@ -280,8 +297,7 @@ server.listen(PORT, () => {
   ║       Running on port ${PORT}            ║
   ╠═══════════════════════════════════════╣
   ║  REST API  →  http://localhost:${PORT}   ║
-  ║  WebSocket →  ws://localhost:${PORT}     ║
-  ║  Database  →  tradex-data.json        ║
+  ║  Database  →  MongoDB Atlas           ║
   ╚═══════════════════════════════════════╝
   `);
 });
