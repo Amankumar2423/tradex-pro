@@ -337,37 +337,44 @@ function AdvancedChart({symbol, data, indicator, T}) {
   };
 
   const handleLogin = async () => {
-    if(!email||!pass){setErr("Fill all fields");return;}
-    setLoading(true); setErr("");
-    try {
-      const res = await fetch("https://tradex-pro.onrender.com/api/auth/login",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({email,password:pass})
-      });
-      const data = await res.json();
-      if(data.token){
-        localStorage.setItem("tradex_token", data.token);
-        localStorage.setItem("tradex_user", JSON.stringify(data.user));
-        onLogin(data.user);
-      } else {
-        setErr(data.error||"Login failed");
-      }
-    } catch {
-      // fallback to demo login if backend is sleeping
-      if(email==="demo@tradex.pro"&&pass==="demo123"){
-        onLogin({name:"Alex Morgan",email:"demo@tradex.pro",cash:10000});
-      } else {
-        setErr("Server is starting up, try again in 30 seconds!");
-      }
+  if(!email||!pass){setErr("Fill all fields");return;}
+  setLoading(true); setErr("");
+  setErr("⏳ Waking up backend server, please wait 30-60 seconds...");
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(()=>controller.abort(), 60000);
+    const res = await fetch("https://tradex-pro.onrender.com/api/auth/login",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({email,password:pass}),
+      signal:controller.signal
+    });
+    clearTimeout(timeout);
+    const data = await res.json();
+    if(data.token){
+      localStorage.setItem("tradex_token", data.token);
+      localStorage.setItem("tradex_user", JSON.stringify(data.user));
+      onLogin(data.user);
+    } else {
+      setErr("❌ " + (data.error||"Invalid email or password"));
     }
-    setLoading(false);
-  };
+  } catch(e) {
+    if(e.name==="AbortError"){
+      setErr("⚠️ Server took too long. Try again!");
+    } else if(email==="demo@tradex.pro"&&pass==="demo123"){
+      onLogin({name:"Alex Morgan",email:"demo@tradex.pro",cash:10000});
+    } else {
+      setErr("⚠️ Backend is starting up. Wait 30 seconds and try again!");
+    }
+  }
+  setLoading(false);
+};
 
   const handleRegister = async () => {
     if(!name||!email||!pass||!confirm){setErr("Fill all fields");return;}
     if(pass!==confirm){setErr("Passwords do not match");return;}
     if(pass.length<6){setErr("Password must be at least 6 characters");return;}
-    setLoading(true); setErr("");
+    setLoading(true); setErr("");setErr("⏳ Waking up backend server, please wait 30-60 seconds...");
     try {
       const res = await fetch("https://tradex-pro.onrender.com/api/auth/register",{
         method:"POST", headers:{"Content-Type":"application/json"},
