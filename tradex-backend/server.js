@@ -16,7 +16,7 @@ app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const JWT_SECRET = "tradex_pro_secret_2024";
-const MONGO_URI = "mongodb+srv://tradexadmin:tradex2024@cluster0.2ft74l3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const MONGO_URI = "mongodb+srv://tradexadmin:rRrsx1ZvEaX8B383@cluster0.2ft74l3.mongodb.net/tradexdb?retryWrites=true&w=majority&appName=Cluster0";
 const DB_NAME = "tradexdb";
 
 let db;
