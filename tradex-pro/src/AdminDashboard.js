@@ -130,6 +130,14 @@ export default function AdminDashboard() {
 
   useEffect(()=>{ if(loggedIn) fetchData(); },[loggedIn]);
 
+useEffect(()=>{
+  if(!loggedIn) return;
+  const autoRefresh = setInterval(()=>{
+    fetchData();
+  }, 10000);
+  return ()=>clearInterval(autoRefresh);
+},[loggedIn]);
+
   useEffect(()=>{
     if(!loggedIn) return;
     const tick = setInterval(async()=>{
