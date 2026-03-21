@@ -22,14 +22,26 @@ const DB_NAME = "tradexdb";
 let db;
 
 // ─── CONNECT TO MONGODB ───────────────────────────────────────────────────────
-MongoClient.connect(MONGO_URI).then(client => {
-  db = client.db(DB_NAME);
-  console.log("✅ Connected to MongoDB Atlas!");
-  console.log("✅ Database: tradexdb");
-}).catch(err => {
-  console.error("❌ MongoDB connection error:", err);
-});
+async function connectDB() {
+  try {
+    const client = await MongoClient.connect(MONGO_URI);
+    db = client.db(DB_NAME);
+    console.log("✅ Connected to MongoDB Atlas!");
+    console.log("✅ Database: tradexdb");
+  } catch(err) {
+    console.error("❌ MongoDB connection error:", err);
+    setTimeout(connectDB, 5000);
+  }
+}
+connectDB();
 
+// ─── DB MIDDLEWARE ────────────────────────────────────────────────────────────
+function dbCheck(req, res, next) {
+  if (!db) return res.status(503).json({ error: "Database connecting, please try again in 30 seconds" });
+  next();
+}
+
+app.use("/api", dbCheck);
 // ─── LIVE STOCK PRICES ────────────────────────────────────────────────────────
 const STOCK_PRICES = {
   AAPL:  { name: "Apple Inc.",       sector: "Technology",     price: 254.48 },
