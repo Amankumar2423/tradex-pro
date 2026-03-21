@@ -16,7 +16,7 @@ app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const JWT_SECRET = "tradex_pro_secret_2024";
-const MONGO_URI = "mongodb+srv://tradexadmin:tradex2026@cluster0.2ft74l3.mongodb.net/tradexdb?retryWrites=true&w=majority&appName=Cluster0&tls=true&tlsAllowInvalidCertificates=true";
+const MONGO_URI = "mongodb+srv://tradexadmin:tradex2024@cluster0.2ft74l3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 const DB_NAME = "tradexdb";
 
 let db;
@@ -267,9 +267,22 @@ app.get("/api/leaderboard", async (req, res) => {
   try {
     const users = await db.collection("users").find({}).toArray();
     const leaders = await Promise.all(users.map(async u => {
-      const txs = await db.collection("transactions").find({ userId: u._id.toString() }).toArray();
+      const userId = u._id.toString();
+      const txs = await db.collection("transactions").find({ 
+        $or: [
+          { userId: userId },
+          { userId: u._id }
+        ]
+      }).toArray();
       const pnl = txs.reduce((s, t) => s + (t.type === "SELL" ? t.total : -t.total), 0);
-      return { id: u._id, name: u.name, email: u.email, trades: txs.length, pnl: parseFloat(pnl.toFixed(2)), cash: u.cash };
+      return { 
+        id: u._id, 
+        name: u.name, 
+        email: u.email, 
+        trades: txs.length, 
+        pnl: parseFloat(pnl.toFixed(2)), 
+        cash: u.cash 
+      };
     }));
     leaders.sort((a, b) => b.pnl - a.pnl);
     res.json(leaders);
