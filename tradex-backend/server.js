@@ -8,48 +8,41 @@ const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const JWT_SECRET = "tradex_pro_secret_2024";
 const MONGO_URI = "mongodb+srv://tradexadmin:rRrsx1ZvEaX8B383@cluster0.2ft74l3.mongodb.net/tradexdb?retryWrites=true&w=majority&appName=Cluster0";
-const DB_NAME = "tradexdb";
 
+const client = new MongoClient(MONGO_URI);
 let db;
 
-// ─── CONNECT TO MONGODB ───────────────────────────────────────────────────────
-async function connectDB() {
+async function startServer() {
   try {
-    const client = await MongoClient.connect(MONGO_URI);
-    db = client.db(DB_NAME);
+    await client.connect();
+    db = client.db("tradexdb");
     console.log("✅ Connected to MongoDB Atlas!");
-    console.log("✅ Database: tradexdb");
+
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, () => {
+      console.log(`
+  ╔═══════════════════════════════════════╗
+  ║       TradeX Pro Backend Server       ║
+  ║       Running on port ${PORT}            ║
+  ╠═══════════════════════════════════════╣
+  ║  REST API  →  http://localhost:${PORT}   ║
+  ║  Database  →  MongoDB Atlas ✅        ║
+  ╚═══════════════════════════════════════╝
+      `);
+    });
   } catch(err) {
-    console.error("❌ MongoDB connection error:", err);
-    setTimeout(connectDB, 5000);
+    console.error("❌ MongoDB connection error:", err.message);
+    process.exit(1);
   }
 }
-connectDB();
 
-// ─── DB MIDDLEWARE ────────────────────────────────────────────────────────────
-function dbCheck(req, res, next) {
-  if (!db) return res.status(503).json({ error: "Database connecting, please try again in 30 seconds" });
-  next();
-}
-
-app.use("/api", (req, res, next) => {
-  if (!db) {
-    connectDB().then(() => next()).catch(() => 
-      res.status(503).json({ error: "Database connecting, please try again" })
-    );
-  } else {
-    next();
-  }
-});
 // ─── LIVE STOCK PRICES ────────────────────────────────────────────────────────
 const STOCK_PRICES = {
   AAPL:  { name: "Apple Inc.",       sector: "Technology",     price: 254.48 },
@@ -94,23 +87,21 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
+app.get("/", (req, res) => res.json({ status: "TradeX Pro Backend Running ✅", database: "MongoDB Atlas ✅", time: new Date() }));
+
 // ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
 app.post("/api/auth/register", async (req, res) => {
   const { name, email, password } = req.body;
-  if (!name || !email || !password)
-    return res.status(400).json({ error: "All fields required" });
+  if (!name || !email || !password) return res.status(400).json({ error: "All fields required" });
   try {
     const existing = await db.collection("users").findOne({ email });
     if (existing) return res.status(400).json({ error: "Email already registered" });
     const hashed = bcrypt.hashSync(password, 10);
-    const result = await db.collection("users").insertOne({
-      name, email, password: hashed, cash: 10000, createdAt: new Date()
-    });
-    const token = jwt.sign({ id: result.insertedId, email, name }, JWT_SECRET, { expiresIn: "7d" });
+    const result = await db.collection("users").insertOne({ name, email, password: hashed, cash: 10000, createdAt: new Date() });
+    const token = jwt.sign({ id: result.insertedId.toString(), email, name }, JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, user: { id: result.insertedId, name, email, cash: 10000 } });
-  } catch(e) {
-    res.status(500).json({ error: "Server error: " + e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/auth/login", async (req, res) => {
@@ -119,11 +110,9 @@ app.post("/api/auth/login", async (req, res) => {
     const user = await db.collection("users").findOne({ email });
     if (!user || !bcrypt.compareSync(password, user.password))
       return res.status(401).json({ error: "Invalid email or password" });
-    const token = jwt.sign({ id: user._id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ id: user._id.toString(), email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, user: { id: user._id, name: user.name, email: user.email, cash: user.cash } });
-  } catch(e) {
-    res.status(500).json({ error: "Server error: " + e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get("/api/auth/me", authMiddleware, async (req, res) => {
@@ -131,9 +120,7 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
     const user = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json({ id: user._id, name: user.name, email: user.email, cash: user.cash });
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── STOCK ROUTES ─────────────────────────────────────────────────────────────
@@ -149,7 +136,7 @@ app.get("/api/stocks/:symbol", (req, res) => {
 app.get("/api/portfolio", authMiddleware, async (req, res) => {
   try {
     const user = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
-    const txs = await db.collection("transactions").find({ userId: req.user.id.toString() }).toArray();
+    const txs = await db.collection("transactions").find({ userId: req.user.id }).toArray();
     const holdings = {};
     txs.forEach(t => {
       if (!holdings[t.symbol]) holdings[t.symbol] = { symbol: t.symbol, quantity: 0, avgBuyPrice: 0, totalCost: 0 };
@@ -161,28 +148,22 @@ app.get("/api/portfolio", authMiddleware, async (req, res) => {
         holdings[t.symbol].quantity -= t.quantity;
       }
     });
-    const activeHoldings = Object.values(holdings)
-      .filter(h => h.quantity > 0)
-      .map(h => ({
-        ...h,
-        currentPrice: STOCK_PRICES[h.symbol]?.price || 0,
-        currentValue: (STOCK_PRICES[h.symbol]?.price || 0) * h.quantity,
-        pnl: ((STOCK_PRICES[h.symbol]?.price || 0) - h.avgBuyPrice) * h.quantity,
-      }));
+    const activeHoldings = Object.values(holdings).filter(h => h.quantity > 0).map(h => ({
+      ...h,
+      currentPrice: STOCK_PRICES[h.symbol]?.price || 0,
+      currentValue: (STOCK_PRICES[h.symbol]?.price || 0) * h.quantity,
+      pnl: ((STOCK_PRICES[h.symbol]?.price || 0) - h.avgBuyPrice) * h.quantity,
+    }));
     res.json({ cash: user.cash, holdings: activeHoldings });
-  } catch(e) {
-    res.status(500).json({ error: "Server error: " + e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── TRADE ────────────────────────────────────────────────────────────────────
 app.post("/api/trade", authMiddleware, async (req, res) => {
   const { symbol, type, quantity, orderType = "market" } = req.body;
   const sym = symbol?.toUpperCase();
-  if (!sym || !type || !quantity)
-    return res.status(400).json({ error: "symbol, type and quantity required" });
-  if (!STOCK_PRICES[sym])
-    return res.status(404).json({ error: "Stock not found" });
+  if (!sym || !type || !quantity) return res.status(400).json({ error: "symbol, type and quantity required" });
+  if (!STOCK_PRICES[sym]) return res.status(404).json({ error: "Stock not found" });
   try {
     const user = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
     const price = STOCK_PRICES[sym].price;
@@ -191,71 +172,59 @@ app.post("/api/trade", authMiddleware, async (req, res) => {
       if (user.cash < total) return res.status(400).json({ error: "Insufficient balance" });
       await db.collection("users").updateOne({ _id: new ObjectId(req.user.id) }, { $inc: { cash: -total } });
     } else {
-      const txs = await db.collection("transactions").find({ userId: req.user.id.toString(), symbol: sym }).toArray();
+      const txs = await db.collection("transactions").find({ userId: req.user.id, symbol: sym }).toArray();
       let held = 0;
       txs.forEach(t => { held += t.type === "BUY" ? t.quantity : -t.quantity; });
       if (held < quantity) return res.status(400).json({ error: "Not enough shares" });
       await db.collection("users").updateOne({ _id: new ObjectId(req.user.id) }, { $inc: { cash: total } });
     }
-    const tx = { userId: req.user.id.toString(), symbol: sym, type, quantity, price, total, orderType, createdAt: new Date() };
+    const tx = { userId: req.user.id, symbol: sym, type, quantity, price, total, orderType, createdAt: new Date() };
     const result = await db.collection("transactions").insertOne(tx);
     const updatedUser = await db.collection("users").findOne({ _id: new ObjectId(req.user.id) });
     res.json({ success: true, transaction: { ...tx, id: result.insertedId }, newCash: updatedUser.cash });
-  } catch(e) {
-    res.status(500).json({ error: "Trade failed: " + e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
 app.get("/api/transactions", authMiddleware, async (req, res) => {
   try {
-    const txs = await db.collection("transactions").find({ userId: req.user.id.toString() }).sort({ createdAt: -1 }).toArray();
+    const txs = await db.collection("transactions").find({ userId: req.user.id }).sort({ createdAt: -1 }).toArray();
     res.json(txs);
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── WATCHLIST ────────────────────────────────────────────────────────────────
 app.get("/api/watchlist", authMiddleware, async (req, res) => {
   try {
-    const items = await db.collection("watchlist").find({ userId: req.user.id.toString() }).toArray();
+    const items = await db.collection("watchlist").find({ userId: req.user.id }).toArray();
     res.json(items);
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/watchlist/:symbol", authMiddleware, async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   try {
-    const existing = await db.collection("watchlist").findOne({ userId: req.user.id.toString(), symbol: sym });
+    const existing = await db.collection("watchlist").findOne({ userId: req.user.id, symbol: sym });
     if (existing) return res.status(400).json({ error: "Already in watchlist" });
-    await db.collection("watchlist").insertOne({ userId: req.user.id.toString(), symbol: sym, addedAt: new Date() });
+    await db.collection("watchlist").insertOne({ userId: req.user.id, symbol: sym, addedAt: new Date() });
     res.json({ success: true });
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete("/api/watchlist/:symbol", authMiddleware, async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   try {
-    await db.collection("watchlist").deleteOne({ userId: req.user.id.toString(), symbol: sym });
+    await db.collection("watchlist").deleteOne({ userId: req.user.id, symbol: sym });
     res.json({ success: true });
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── ORDERS ───────────────────────────────────────────────────────────────────
 app.get("/api/orders", authMiddleware, async (req, res) => {
   try {
-    const orders = await db.collection("orders").find({ userId: req.user.id.toString(), status: "pending" }).toArray();
+    const orders = await db.collection("orders").find({ userId: req.user.id, status: "pending" }).toArray();
     res.json(orders);
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/orders", authMiddleware, async (req, res) => {
@@ -264,22 +233,18 @@ app.post("/api/orders", authMiddleware, async (req, res) => {
     return res.status(400).json({ error: "All fields required" });
   try {
     const result = await db.collection("orders").insertOne({
-      userId: req.user.id.toString(), symbol: symbol.toUpperCase(),
+      userId: req.user.id, symbol: symbol.toUpperCase(),
       tradeType, orderType, quantity, triggerPrice, status: "pending", createdAt: new Date()
     });
     res.json({ success: true, orderId: result.insertedId });
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete("/api/orders/:id", authMiddleware, async (req, res) => {
   try {
-    await db.collection("orders").deleteOne({ _id: new ObjectId(req.params.id), userId: req.user.id.toString() });
+    await db.collection("orders").deleteOne({ _id: new ObjectId(req.params.id), userId: req.user.id });
     res.json({ success: true });
-  } catch(e) {
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ─── LEADERBOARD ──────────────────────────────────────────────────────────────
@@ -288,49 +253,20 @@ app.get("/api/leaderboard", async (req, res) => {
     const users = await db.collection("users").find({}).toArray();
     const leaders = await Promise.all(users.map(async u => {
       const userId = u._id.toString();
-      const txs = await db.collection("transactions").find({ 
-        $or: [
-          { userId: userId },
-          { userId: u._id }
-        ]
-      }).toArray();
+      const txs = await db.collection("transactions").find({ userId }).toArray();
       const pnl = txs.reduce((s, t) => s + (t.type === "SELL" ? t.total : -t.total), 0);
-      return { 
-        id: u._id, 
-        name: u.name, 
-        email: u.email, 
-        trades: txs.length, 
-        pnl: parseFloat(pnl.toFixed(2)), 
-        cash: u.cash 
-      };
+      return { id: userId, name: u.name, email: u.email, trades: txs.length, pnl: parseFloat(pnl.toFixed(2)), cash: u.cash };
     }));
     leaders.sort((a, b) => b.pnl - a.pnl);
     res.json(leaders);
-  } catch(e) {
-    res.status(500).json({ error: "Server error: " + e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
-// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.json({ status: "TradeX Pro Backend Running ✅", database: "MongoDB Atlas ✅", time: new Date() }));
 
 // ─── WEBSOCKET ────────────────────────────────────────────────────────────────
 io.on("connection", socket => {
-  console.log("📡 Client connected:", socket.id);
   socket.emit("price_update", getPrices());
-  socket.on("disconnect", () => console.log("📡 Disconnected:", socket.id));
+  socket.on("disconnect", () => {});
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`
-  ╔═══════════════════════════════════════╗
-  ║       TradeX Pro Backend Server       ║
-  ║       Running on port ${PORT}            ║
-  ╠═══════════════════════════════════════╣
-  ║  REST API  →  http://localhost:${PORT}   ║
-  ║  Database  →  MongoDB Atlas           ║
-  ╚═══════════════════════════════════════╝
-  `);
-});
+startServer();
