@@ -41,7 +41,15 @@ function dbCheck(req, res, next) {
   next();
 }
 
-app.use("/api", dbCheck);
+app.use("/api", (req, res, next) => {
+  if (!db) {
+    connectDB().then(() => next()).catch(() => 
+      res.status(503).json({ error: "Database connecting, please try again" })
+    );
+  } else {
+    next();
+  }
+});
 // ─── LIVE STOCK PRICES ────────────────────────────────────────────────────────
 const STOCK_PRICES = {
   AAPL:  { name: "Apple Inc.",       sector: "Technology",     price: 254.48 },
