@@ -309,8 +309,9 @@ useEffect(()=>{
                           <div style={{ width:34,height:34,borderRadius:"50%",background:T.accent+"33",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,color:T.accent }}>
                             {u.name?.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase()}
                           </div>
-                          <div><div style={{ fontWeight:700,fontSize:13 }}>{u.name}</div><div style={{ fontSize:10,color:T.muted }}>ID #{u.id}</div></div>
-                        </div>
+                          <div style={{ fontWeight:700,fontSize:13,color:T.text }}>{u.name||"Unknown User"}</div>
+<div style={{ fontSize:10,color:T.muted }}>{u.email||"No email"}</div>
+                      </div>
                         <div style={{ textAlign:"right",fontWeight:700,fontSize:13,color:u.pnl>=0?T.green:T.red }}>{u.pnl>=0?"+":""}${u.pnl?.toFixed(2)||"0.00"}</div>
                         <div style={{ textAlign:"right",fontWeight:700,fontSize:13 }}>{u.trades}</div>
                         <div style={{ display:"flex",gap:5,justifyContent:"flex-end" }}>
